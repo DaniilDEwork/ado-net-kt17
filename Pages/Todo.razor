@@ -1,0 +1,205 @@
+@page "/todo"
+@inject TodoService Store
+
+<PageTitle>To-Do List - КТ-17</PageTitle>
+<h1>To-Do List</h1>
+@if (!Store.IsLoaded)
+{
+    <p>Загрузка списка задач</p>
+}
+else
+{
+    @if (Store.StorageError is not null)
+    {
+        <p class="error" role="alert">@Store.StorageError</p>
+    }
+    @if (notice is not null)
+    {
+        <p class="success" role="status">@notice</p>
+    }
+
+    <form @onsubmit="AddTask" @onsubmit:preventDefault novalidate>
+        <label for="new-task">Новая задача</label>
+        <div class="add-row">
+            <input id="new-task" type="text" value="@newTask" @oninput="HandleNewInput" maxlength="200" placeholder="Введите название задачи" />
+            <button type="submit">Добавить</button>
+        </div>
+        @if (newTaskError is not null)
+        {
+            <p class="error" role="alert">@newTaskError</p>
+        }
+    </form>
+
+    <p class="task-summary">Всего: <strong>@Store.Tasks.Count</strong> | Выполнено: <strong>@CompletedCount</strong> | Осталось: <strong>@(Store.Tasks.Count - CompletedCount)</strong></p>
+    <div class="form-grid">
+        <div>
+            <label for="task-filter">Показать</label>
+            <select id="task-filter" @bind="filter">
+                <option value="all">Все задачи</option>
+                <option value="active">Невыполненные</option>
+                <option value="completed">Выполненные</option>
+            </select>
+        </div>
+        <div>
+            <label for="task-search">Поиск</label>
+            <input id="task-search" type="search" @bind="search" @bind:event="oninput" placeholder="Поиск по названию" />
+        </div>
+    </div>
+
+    @if (Store.Tasks.Count == 0)
+    {
+        <p>Список задач пуст</p>
+    }
+    else if (VisibleTasks.Count == 0)
+    {
+        <p>Задачи не найдены</p>
+    }
+    else
+    {
+        <div class="table-wrap">
+            <table>
+                <thead><tr><th>Готово</th><th>Задача</th><th>Статус</th><th>Действия</th></tr></thead>
+                <tbody>
+                @foreach (var item in VisibleTasks)
+                {
+                    <tr @key="item.Id">
+                        <td>
+                            <input id="completion-@item.Id" class="completion-checkbox" type="checkbox" checked="@item.IsComplete" @onchange="args => ToggleCompletion(item.Id, args)" aria-label="Выполнение задачи" />
+                        </td>
+                        <td>
+                            @if (editingId == item.Id)
+                            {
+                                <input id="edit-task" type="text" value="@editName" @oninput="HandleEditInput" maxlength="200" aria-label="Название задачи" />
+                                @if (editError is not null)
+                                {
+                                    <p class="error" role="alert">@editError</p>
+                                }
+                            }
+                            else
+                            {
+                                <span class="@(item.IsComplete ? "task-name completed" : "task-name")">@item.Name</span>
+                            }
+                        </td>
+                        <td>@(item.IsComplete ? "Выполнена" : "Не выполнена")</td>
+                        <td><div class="table-actions">
+                            @if (editingId == item.Id)
+                            {
+                                <button @onclick="SaveEdit">Сохранить</button>
+                                <button @onclick="CancelEdit">Отмена</button>
+                            }
+                            else
+                            {
+                                <button @onclick="() => StartEdit(item)">Изменить</button>
+                            }
+                            <button class="danger" @onclick="() => DeleteTask(item.Id)">Удалить</button>
+                        </div></td>
+                    </tr>
+                }
+                </tbody>
+            </table>
+        </div>
+    }
+
+    <div class="actions">
+        <button @onclick="ResetFilters">Сбросить фильтры</button>
+        <button class="danger" disabled="@(CompletedCount == 0)" @onclick="DeleteCompleted">Удалить выполненные</button>
+    </div>
+}
+
+@code {
+    private string newTask = "";
+    private string? newTaskError;
+    private string filter = "all";
+    private string search = "";
+    private Guid? editingId;
+    private string editName = "";
+    private string? editError;
+    private string? notice;
+
+    private int CompletedCount => Store.Tasks.Count(item => item.IsComplete);
+
+    private List<TaskItem> VisibleTasks => Store.Tasks
+        .Where(item => filter != "active" || !item.IsComplete)
+        .Where(item => filter != "completed" || item.IsComplete)
+        .Where(item => item.Name.Contains(search.Trim(), StringComparison.OrdinalIgnoreCase))
+        .ToList();
+
+    protected override async Task OnInitializedAsync() => await Store.LoadAsync();
+
+    private void HandleNewInput(ChangeEventArgs args)
+    {
+        newTask = args.Value?.ToString() ?? "";
+        if (newTaskError is not null) newTaskError = NameError(newTask);
+    }
+
+    private async Task AddTask()
+    {
+        newTaskError = NameError(newTask);
+        if (newTaskError is not null) return;
+        await Store.AddAsync(newTask);
+        newTask = "";
+        notice = "Задача добавлена";
+    }
+
+    private async Task ToggleCompletion(Guid id, ChangeEventArgs args)
+    {
+        await Store.SetCompletionAsync(id, args.Value is true);
+        notice = "Статус задачи обновлён";
+    }
+
+    private void StartEdit(TaskItem item)
+    {
+        editingId = item.Id;
+        editName = item.Name;
+        editError = null;
+        notice = null;
+    }
+
+    private void HandleEditInput(ChangeEventArgs args)
+    {
+        editName = args.Value?.ToString() ?? "";
+        if (editError is not null) editError = NameError(editName);
+    }
+
+    private async Task SaveEdit()
+    {
+        editError = NameError(editName);
+        if (editError is not null || editingId is null) return;
+        await Store.RenameAsync(editingId.Value, editName);
+        CancelEdit();
+        notice = "Название задачи изменено";
+    }
+
+    private void CancelEdit()
+    {
+        editingId = null;
+        editName = "";
+        editError = null;
+    }
+
+    private async Task DeleteTask(Guid id)
+    {
+        await Store.DeleteAsync(id);
+        if (editingId == id) CancelEdit();
+        notice = "Задача удалена";
+    }
+
+    private async Task DeleteCompleted()
+    {
+        await Store.DeleteCompletedAsync();
+        if (editingId is not null && Store.Tasks.All(item => item.Id != editingId.Value)) CancelEdit();
+        notice = "Выполненные задачи удалены";
+    }
+
+    private void ResetFilters()
+    {
+        filter = "all";
+        search = "";
+    }
+
+    private static string? NameError(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return "Введите название задачи";
+        return value.Trim().Length > 200 ? "Название не должно быть длиннее 200 символов" : null;
+    }
+}
